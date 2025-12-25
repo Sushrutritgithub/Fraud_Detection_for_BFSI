@@ -1,11 +1,15 @@
-from fastapi import FastAPI
+from fastapi import APIRouter
 import joblib
 from pydantic import BaseModel
 from src.preprocessing.Preprocessing1 import preprocess_input
+from src.utils.explainer import generate_risk_explanation
+from src.database.save_prediction import save_prediction
+import uuid
 import json
 import numpy as np
+import time
 
-app = FastAPI(title="Fraud Detection API")
+router = APIRouter()
 
 model = joblib.load("src/models/fraud_model.pkl")
 feature_order = joblib.load("src/models/model_features.pkl")
@@ -27,13 +31,14 @@ class Transaction(BaseModel):
     transaction_type: str  
 
 
-@app.get("/")
-def root():
-    return {"message": "Fraud Detection API Running"}
+# @router.get("/")
+# def root():
+#     return {"message": "Fraud Detection API Running"}
 
 
-@app.post("/predict")
+@router.post("/predict")
 def predict_transaction(txn: Transaction):
+    start_time = time.time()
     
     
     data = txn.dict()
@@ -48,16 +53,35 @@ def predict_transaction(txn: Transaction):
     threshold = 0.10
     pred = int(prob > threshold)
 
+    explanation = generate_risk_explanation(data, prob)
+
+    transaction_id = str(uuid.uuid4())
+
+    end_time = time.time()
+    latency_ms = (end_time - start_time) * 1000
+    save_prediction(
+        transaction_id,
+        float(prob),
+        pred,
+        explanation,
+        round(latency_ms, 2)
+    )
     # Optional: Save prediction to DB
     # from src.database.mysql_connection import save_prediction
     # save_prediction(data, prob, pred)
 
     return {
+        "transaction_id": transaction_id,
         "fraud_probability": float(prob),
-        "is_fraud": pred
+        "is_fraud": pred,
+        "explanation": explanation,
+        "latency_ms": round(latency_ms, 2)
     }
 
 
-@app.get("/metrics")
+@router.get("/metrics")
 def get_metrics():
+    print("Loaded metrics:", saved_metrics)
     return saved_metrics
+
+# uvicorn src.api.predict:app --reload
