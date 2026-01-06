@@ -3,6 +3,9 @@ import joblib
 from pydantic import BaseModel
 from src.preprocessing.Preprocessing1 import preprocess_input
 from src.utils.explainer import generate_risk_explanation
+from src.utils.explainer import generate_explanation
+from src.utils.alert_manager import trigger_alert
+from src.database.save_alert import save_alert
 from src.database.save_prediction import save_prediction
 import uuid
 import json
@@ -13,7 +16,6 @@ router = APIRouter()
 
 model = joblib.load("src/models/fraud_model.pkl")
 feature_order = joblib.load("src/models/model_features.pkl")
-
 
 try:
     with open("metrics.json", "r") as f:
@@ -50,12 +52,19 @@ def predict_transaction(txn: Transaction):
     prob = model.predict_proba(X)[0][1]
 
     
-    threshold = 0.10
+    threshold = 0.005
     pred = int(prob > threshold)
 
     explanation = generate_risk_explanation(data, prob)
+    llm_explanations = generate_explanation(prob, data)
 
     transaction_id = str(uuid.uuid4())
+
+    trigger_alert(
+    transaction_id,
+    float(prob),
+    explanation
+    )
 
     end_time = time.time()
     latency_ms = (end_time - start_time) * 1000
@@ -66,6 +75,14 @@ def predict_transaction(txn: Transaction):
         explanation,
         round(latency_ms, 2)
     )
+
+    alert_level = f"{prob:.2f}"
+    save_alert(
+        transaction_id=transaction_id,
+        fraud_prob=float(prob),
+        alert_level=alert_level,
+        message=f"{alert_level} risk transaction detected"
+        )
     # Optional: Save prediction to DB
     # from src.database.mysql_connection import save_prediction
     # save_prediction(data, prob, pred)
@@ -74,7 +91,7 @@ def predict_transaction(txn: Transaction):
         "transaction_id": transaction_id,
         "fraud_probability": float(prob),
         "is_fraud": pred,
-        "explanation": explanation,
+        "explanation": llm_explanations,
         "latency_ms": round(latency_ms, 2)
     }
 
